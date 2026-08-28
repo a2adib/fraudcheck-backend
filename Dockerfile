@@ -10,7 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
 # healthcheck.
 ENV PATH="/app/.venv/bin:$PATH"
 
-RUN pip install --no-cache-dir uv
+# Copy the uv binary from its official image. `pip install uv` works but costs
+# minutes on every cold build, including CI's compose-build job.
+COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
 
 WORKDIR /app
 
