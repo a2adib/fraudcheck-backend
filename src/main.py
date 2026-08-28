@@ -8,6 +8,7 @@ from sqlalchemy import text
 from starlette import status
 from starlette.middleware.cors import CORSMiddleware
 
+from src.auth.routes import router as auth_router
 from src.cache.redis_client import async_redis_client
 from src.common.exceptions import AuthAPIError
 from src.config import app_configs, settings
@@ -56,6 +57,7 @@ async def auth_api_error_handler(_request: Request, exc: AuthAPIError) -> JSONRe
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 # Registered here as each domain lands.
+app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

@@ -51,6 +51,11 @@ ps:
 seed:
   uv run python -m scripts.seed_demo
 
+# Mint the FR-1.11 permission catalogue + owner role. Idempotent, no demo data —
+# run it after `just migrate` on every environment, production included.
+permissions:
+  uv run python -m scripts.sync_permissions
+
 # ── Tests (local — requires uv) ───────────────────────────────────────────────
 test *args:
   docker compose -f docker-compose.test.yml down -v

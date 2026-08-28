@@ -28,6 +28,9 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 # Import every model module so SQLModel.metadata is populated before create_all.
+import src.auth.associations
+import src.auth.models
+import src.securities.models
 import src.users.models  # noqa: F401
 from src.config import settings
 from src.database import get_session
@@ -89,6 +92,20 @@ def cheap_password_hashing() -> None:
     from src.auth.utils import pwd_context
 
     pwd_context.update(argon2__time_cost=1, argon2__memory_cost=8, argon2__parallelism=1)
+
+
+@pytest.fixture
+async def permission_catalogue(async_session: AsyncSession) -> list[str]:
+    """
+    Mint the FR-1.11 catalogue and the owner role inside the test's transaction.
+
+    Function-scoped on purpose: the savepoint rolls it back, so a test that never asks
+    for permissions still sees an empty catalogue.
+    """
+    from src.auth.services import AuthorizationService
+
+    permissions = await AuthorizationService(async_session).sync_permission_catalogue()
+    return [permission.code for permission in permissions]
 
 
 @pytest.fixture(scope="session")

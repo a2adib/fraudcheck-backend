@@ -27,3 +27,17 @@ class IDMixin(SQLModel):
 
 class CommonFieldMixin(IDMixin, TimestampMixin):
     is_active: bool = True
+
+
+def require_id(instance: IDMixin) -> int:
+    """
+    Narrow a persisted row's ``id`` from ``int | None`` to ``int``.
+
+    ``id`` is optional on the model because it is unset until the row is flushed;
+    every caller here holds a committed row, and this makes that explicit instead of
+    spreading ``# type: ignore`` over each foreign-key assignment.
+    """
+    if instance.id is None:
+        msg = f"{type(instance).__name__} has no id — it was never committed."
+        raise RuntimeError(msg)
+    return instance.id

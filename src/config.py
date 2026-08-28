@@ -2,7 +2,7 @@ import base64
 import os
 from typing import Any
 
-from pydantic import PostgresDsn, field_validator
+from pydantic import PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.constants import Environment
@@ -54,6 +54,18 @@ class Config(CustomBaseSettings):
     ENCRYPTION_KEY: str
     ENCRYPTION_KEY_VERSION: int = 1
 
+    # EMAIL (FR-1.10 OTP delivery)
+    # With SMTP_HOST unset the sender falls back to logging — allowed only on a
+    # non-deployed environment, enforced by _validate_email_transport below.
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM_EMAIL: str = "no-reply@fraudcheck.test"
+    SMTP_FROM_NAME: str = "Fraud Checker BD"
+    SMTP_USE_TLS: bool = True
+    SMTP_TIMEOUT_SECONDS: float = 10.0
+
     # AUTH POLICY
     MAX_FAILED_LOGIN_ATTEMPTS: int = 5
     ACCOUNT_LOCKOUT_MINUTES: int = 15
@@ -104,6 +116,20 @@ class Config(CustomBaseSettings):
             msg = f"ENCRYPTION_KEY must decode to exactly {AES_256_KEY_BYTES} bytes for AES-256-GCM"
             raise ValueError(msg)
         return value
+
+    @model_validator(mode="after")
+    def _validate_email_transport(self) -> "Config":
+        """
+        Refuse to deploy without a real mail transport.
+
+        The fallback sender writes the OTP to the log. That is a convenience for local
+        development and a credential leak anywhere else, so a deployed environment must
+        configure SMTP rather than discover this at the first password reset.
+        """
+        if self.ENVIRONMENT.is_deployed and not self.SMTP_HOST:
+            msg = "SMTP_HOST is required on a deployed environment — OTP email cannot be logged"
+            raise ValueError(msg)
+        return self
 
     @property
     def encryption_key_bytes(self) -> bytes:

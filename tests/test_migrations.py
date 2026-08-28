@@ -16,10 +16,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlmodel import SQLModel
 
+# Import every model module so SQLModel.metadata is complete — mirrors alembic/env.py.
+import src.auth.associations
+import src.auth.models
+import src.securities.models
 from alembic import command
 from src.config import settings
 
-# Import every model module so SQLModel.metadata is complete — mirrors alembic/env.py.
 import src.users.models  # noqa: F401  isort:skip
 
 

@@ -7,9 +7,13 @@ def generate_public_id() -> str:
     return secrets.token_urlsafe(nbytes=8)
 
 
+#: FR-1.10 — the reset OTP is exactly six digits.
+OTP_LENGTH = 6
+
+
 def generate_otp_token() -> str:
     """Generate a 6-digit OTP."""
-    return f"{secrets.randbelow(1000000):06d}"
+    return f"{secrets.randbelow(10**OTP_LENGTH):0{OTP_LENGTH}d}"
 
 
 def generate_opaque_token(nbytes: int = 32) -> str:

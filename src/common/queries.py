@@ -71,6 +71,34 @@ async def get_instance_id_or_404(
     return db_instance_id
 
 
+async def get_ids_from_public_ids(
+    session: AsyncSession, model: type[CommonFieldMixin], public_ids: list[str]
+) -> list[int]:
+    """
+    Resolve public ids to internal ids, preserving the caller's order.
+
+    Raises 404 naming the ids that did not resolve, so a partially valid list fails
+    loudly instead of silently linking a subset.
+    """
+    rows = (
+        await session.exec(
+            select(model.id, model.public_id).where(
+                model.is_active,
+                model.public_id.in_(public_ids),  # type: ignore[attr-defined]
+            )
+        )
+    ).all()
+    id_by_public_id: dict[str, int] = {
+        public_id: instance_id for instance_id, public_id in rows if instance_id is not None
+    }
+
+    missing = [public_id for public_id in public_ids if public_id not in id_by_public_id]
+    if missing:
+        raise HTTP404(detail=f"{model.__name__} not found: {', '.join(missing)}")
+
+    return [id_by_public_id[public_id] for public_id in public_ids]
+
+
 async def delete_instance_or_404(session: AsyncSession, model: type[T], public_id: str) -> None:
     """Soft delete an instance."""
     logger.info("Soft deleting %s public_id=%s", model.__name__, public_id)

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -18,7 +19,9 @@ class StandardResponse(BaseModel, Generic[T]):
 
 
 def create_response(
-    data: list[dict[str, Any]] | dict[str, Any] | list[BaseModel] | BaseModel | None = None,
+    # Sequence, not list: list is invariant, so a list[RoleOut] would not satisfy
+    # list[BaseModel] and every caller with a concrete model list would need a cast.
+    data: Sequence[dict[str, Any]] | dict[str, Any] | Sequence[BaseModel] | BaseModel | None = None,
     message: str = MESSAGE_200,
     pagination: PaginationResponse | None = None,
     meta: dict[str, Any] | None = None,
