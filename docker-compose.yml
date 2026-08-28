@@ -1,0 +1,93 @@
+name: fraudcheck
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: fraudcheck-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fraudcheck
+    # 5434 on the host: 5432 is commonly taken by a native Postgres install and
+    # 5433 belongs to docker-compose.test.yml.
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: fraudcheck-redis
+    restart: unless-stopped
+    # 6381 on the host: 6379 is commonly taken by another project's redis and
+    # 6380 belongs to docker-compose.test.yml.
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel notice
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  # AC-11.1: `docker compose up` must reach a healthy API in 60 seconds with no
+  # credentials configured. Every value below is a demo value — mock mode means no
+  # courier credential is ever needed, and the two secrets are throwaway.
+  api:
+    build: .
+    container_name: fraudcheck-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: LOCAL
+      DEBUG: "true"
+      MOCK_MODE: "true"
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fraudcheck
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CORS_ORIGINS: '["http://localhost:5173"]'
+      JWT_SECRET_KEY: demo-only-not-a-real-secret-regenerate-for-any-deployment
+      ENCRYPTION_KEY: rtdbULRrrDWUYVtxiF1qKZZdXbUAk71ZJ3dO2CMvfig=
+    ports:
+      - "127.0.0.1:8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn src.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      # python, not curl: the slim image ships no curl. /health returns 503 while a
+      # dependency is down, which urlopen raises on — exactly what we want here.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://localhost:8000/health")
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

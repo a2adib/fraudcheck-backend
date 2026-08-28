@@ -1,0 +1,83 @@
+name: CI
+
+# NFR-4 specifies five jobs: api, api-ml, web, widget, and a compose build.
+# This repository is the backend module only, so `web` and `widget` live with
+# apps/web when it lands, and `api-ml` turns on with M10 — it runs
+# `uv sync --extra ml && pytest tests/ml`, neither of which exists yet.
+#
+# The `api` job deliberately installs WITHOUT the ml extra, so FR-17.3's
+# degradation path is proven on every commit once the ML layer exists.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ENV_FILE: .env.test
+
+jobs:
+  api:
+    name: api (lint, types, tests)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fraudcheck_test
+        # Ports match .env.test, which pytest-dotenv loads.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy --strict
+        run: uv run mypy src
+
+      - name: pytest
+        run: uv run --group test pytest -n auto --cov=src --cov-report=term-missing
+
+  compose-build:
+    name: docker compose build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: docker compose build
