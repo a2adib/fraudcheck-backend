@@ -4,10 +4,20 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from alembic import context
-from src.config import settings
 
 # Import every model module so SQLModel.metadata is fully populated before
 # autogenerate runs. Add new domains here.
+from src.auth.associations import RolePermissionLink, UserRoleLink  # noqa: F401
+from src.auth.models import (  # noqa: F401
+    Otp,
+    PasswordResetToken,
+    Permission,
+    RetiredRefreshToken,
+    Role,
+    UserSession,
+)
+from src.config import settings
+from src.securities.models import ActivityLog  # noqa: F401
 from src.users.models import User  # noqa: F401
 
 config = context.config

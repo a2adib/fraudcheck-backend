@@ -43,7 +43,7 @@ src/
   constants.py       # Environment enum, DB naming convention
   database.py        # async SQLAlchemy engine + get_session dependency
   logging_config.py  # structlog: console locally, JSON when deployed
-  common/            # shared base: mixins, response, exceptions, queries, filters, types, utils
+  common/            # shared base: mixins, response, exceptions, queries, filters, types, utils, emails
   cache/             # redis clients + cache_result decorator
   auth/              # -> /auth         login, refresh, logout, OTP reset, roles, permissions
   users/             # -> /users        User (a merchant IS a tenant — there is no Company)

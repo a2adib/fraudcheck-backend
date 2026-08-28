@@ -5,6 +5,7 @@ description = "Multi-tenant COD risk assessment service for Bangladeshi e-commer
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiosmtplib>=4.0.2",
     "alembic>=1.18.4",
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
