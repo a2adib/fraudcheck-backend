@@ -1,0 +1,26 @@
+# Mirrors the CI lint gate (.github/workflows/ci.yml) so a hook failure and a red CI
+# run mean the same thing. Type checking and tests stay out: mypy is slow enough to
+# make commits painful and pytest needs Docker — `just check` runs both.
+default_stages: [pre-commit]
+exclude: '^(\.venv|docs/adr)/'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      # A .env is gitignored, but a stray key pasted into a tracked file is not.
+      - id: detect-private-key
+
+  # Pinned to the ruff in pyproject's dev group — a drifting rev lints differently
+  # here than in CI, which is worse than not running it at all.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
