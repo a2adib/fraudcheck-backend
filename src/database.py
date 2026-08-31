@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -27,6 +28,25 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_session() -> AsyncGenerator[AsyncSession]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
+@asynccontextmanager
+async def session_scope() -> AsyncGenerator[AsyncSession]:
+    """
+    Open a session for work that outlives a request.
+
+    ``get_session`` is a FastAPI dependency and dies with the response. The check
+    orchestrator deliberately keeps running after a client disconnects (AC-6.10), so it
+    opens its own session rather than borrowing one that is about to be closed.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session

@@ -58,7 +58,9 @@ src/
   securities/        # -> /securities   ActivityLog (audit)
 ```
 
-Packages below `checks/` do not exist yet — they land with their milestones. The layout, and why
+`behavior/`, `orders/`, `bulk/`, `apikeys/` and `ml/` do not exist yet — they land with their
+milestones. `logistics/` currently ships the Pathao adapter, the token manager and the breaker;
+RedX and Steadfast adapters are still to come, and mock mode covers all three providers meanwhile. The layout, and why
 it diverges from the spec's §3.1 layer tree, is recorded in
 [ADR-0001](docs/adr/0001-domain-packages-over-layer-packages.md), which also maps NFR-3's
 coverage paths (`services/scoring`, `infra/breaker`, …) onto real files here.

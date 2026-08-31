@@ -29,3 +29,14 @@ async def get_redis_health() -> dict[str, str]:
     except Exception:  # noqa: BLE001
         return {"redis": "down"}
     return {"redis": "up"}
+
+
+def get_async_redis() -> aioredis.Redis:
+    """
+    Resolve the shared async client at call time.
+
+    Everything that touches Redis goes through this rather than importing the client
+    object, so a single monkeypatch here swaps the client for the whole process — which
+    is what lets each test bind a client to its own event loop.
+    """
+    return async_redis_client

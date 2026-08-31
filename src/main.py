@@ -9,9 +9,11 @@ from starlette import status
 from starlette.middleware.cors import CORSMiddleware
 
 from src.auth.routes import router as auth_router
-from src.cache.redis_client import async_redis_client
+from src.cache.redis_client import get_async_redis
+from src.checks.routes import router as checks_router
 from src.common.exceptions import AuthAPIError
 from src.config import app_configs, settings
+from src.credentials.routes import router as credentials_router
 from src.database import async_engine
 from src.logging_config import setup_logging
 
@@ -58,6 +60,8 @@ async def auth_api_error_handler(_request: Request, exc: AuthAPIError) -> JSONRe
 # ── Routers ───────────────────────────────────────────────────────────────────
 # Registered here as each domain lands.
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+app.include_router(credentials_router, prefix="/credentials", tags=["Credentials"])
+app.include_router(checks_router, prefix="/checks", tags=["Checks"])
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -82,7 +86,7 @@ async def health() -> JSONResponse:
         components["postgres"] = "down"
 
     try:
-        await async_redis_client.ping()
+        await get_async_redis().ping()
         components["redis"] = "up"
     except Exception:
         logger.exception("Health check: Redis unreachable")
