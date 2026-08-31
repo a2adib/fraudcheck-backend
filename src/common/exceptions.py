@@ -63,6 +63,12 @@ class HTTP500(HTTPException):
         super().__init__(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
 
 
+class HTTP501(HTTPException):
+    def __init__(self, detail: str) -> None:
+        """Raise HTTP 501 exception"""
+        super().__init__(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
+
+
 class HTTP502(HTTPException):
     def __init__(self, detail: str) -> None:
         """Raise HTTP 502 exception"""

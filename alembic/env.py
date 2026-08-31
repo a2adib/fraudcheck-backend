@@ -16,7 +16,9 @@ from src.auth.models import (  # noqa: F401
     Role,
     UserSession,
 )
+from src.checks.models import CheckRequest, ProviderResult  # noqa: F401
 from src.config import settings
+from src.credentials.models import CourierCredential  # noqa: F401
 from src.securities.models import ActivityLog  # noqa: F401
 from src.users.models import User  # noqa: F401
 

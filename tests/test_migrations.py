@@ -19,6 +19,8 @@ from sqlmodel import SQLModel
 # Import every model module so SQLModel.metadata is complete — mirrors alembic/env.py.
 import src.auth.associations
 import src.auth.models
+import src.checks.models
+import src.credentials.models
 import src.securities.models
 from alembic import command
 from src.config import settings

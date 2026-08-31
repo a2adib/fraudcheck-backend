@@ -73,9 +73,10 @@ omit = ["src/templates/*"]
 [tool.coverage.report]
 show_missing = true
 # NFR-3 wants 80% overall and 100% on scoring / behavior / decision / breaker / lock.
-# The gate stays at 0 through M0 — the suite is a smoke suite and a hard threshold
-# would just be permanently red. Raise this to 80 when the M1 auth port lands.
-fail_under = 0
+# Enforced from M4: src/checks/scoring.py, src/logistics/breaker.py and
+# src/logistics/token_manager.py are each at 100% today; the rest of the tree carries
+# the 80% floor. Raise the floor as behavior/ and orders/ land, never lower it.
+fail_under = 80
 
 [tool.ruff]
 line-length = 100

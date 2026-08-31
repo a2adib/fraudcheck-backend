@@ -18,6 +18,7 @@ import os
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
+import redis.asyncio as aioredis
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine, text
@@ -30,11 +31,16 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 # Import every model module so SQLModel.metadata is populated before create_all.
 import src.auth.associations
 import src.auth.models
+import src.cache.redis_client
+import src.checks.models
+import src.credentials.models
 import src.securities.models
-import src.users.models  # noqa: F401
+import src.users.models
+from src.auth.schemas import RegisterRequest
 from src.config import settings
 from src.database import get_session
 from src.main import app
+from src.users.models import User
 
 
 def _worker_database_url(base_url: str) -> str:
@@ -167,3 +173,92 @@ async def client(test_app: FastAPI) -> AsyncGenerator[AsyncClient]:
         base_url="http://test",
     ) as async_client:
         yield async_client
+
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+
+
+async def _flush_prefix(client: aioredis.Redis) -> None:
+    keys = await client.keys(f"{settings.REDIS_KEY_PREFIX}*")
+    if keys:
+        await client.delete(*keys)
+
+
+@pytest.fixture(autouse=True)
+async def redis_client(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[aioredis.Redis]:
+    """
+    Bind a Redis client to *this* test's event loop and key namespace.
+
+    Two problems get solved here. The client is per test because a redis-py async client
+    caches connections against the loop that opened them, and pytest-asyncio gives every
+    test a fresh loop. The key prefix is per xdist worker because the workers share one
+    Redis server, and a ``flushdb`` in one would delete another's tokens mid-test.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    monkeypatch.setattr(settings, "REDIS_KEY_PREFIX", f"test:{worker}:")
+
+    client = aioredis.Redis(
+        host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True
+    )
+    monkeypatch.setattr(src.cache.redis_client, "async_redis_client", client)
+
+    await _flush_prefix(client)
+    try:
+        yield client
+    finally:
+        await _flush_prefix(client)
+        await client.aclose()
+
+
+# ── Merchants ─────────────────────────────────────────────────────────────────
+
+MERCHANT_EMAIL = "merchant@example.com"
+OTHER_MERCHANT_EMAIL = "other@example.com"
+MERCHANT_PASSWORD = "correct-horse-battery"
+
+
+async def register_merchant(
+    session: AsyncSession,
+    email: str = MERCHANT_EMAIL,
+    password: str = MERCHANT_PASSWORD,
+) -> User:
+    """
+    Register through the real service, so the merchant holds the Owner role.
+
+    Building a ``User`` row by hand would skip ``grant_default_role`` and every
+    permission-guarded route would then 403 for reasons that have nothing to do with
+    the behaviour under test.
+    """
+    from src.auth.services import AuthenticationService
+
+    return await AuthenticationService(session).register(
+        RegisterRequest(email=email, password=password, full_name="Test Merchant")
+    )
+
+
+@pytest.fixture
+async def merchant(async_session: AsyncSession, permission_catalogue: list[str]) -> User:
+    return await register_merchant(async_session)
+
+
+@pytest.fixture
+async def other_merchant(async_session: AsyncSession, permission_catalogue: list[str]) -> User:
+    """Register a second tenant, for the isolation suite."""
+    return await register_merchant(async_session, email=OTHER_MERCHANT_EMAIL)
+
+
+async def bearer_headers(
+    client: AsyncClient,
+    email: str = MERCHANT_EMAIL,
+    password: str = MERCHANT_PASSWORD,
+) -> dict[str, str]:
+    response = await client.post("/auth/login", json={"identifier": email, "password": password})
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['data']['access_token']}"}
+
+
+@pytest.fixture
+async def auth_client(client: AsyncClient, merchant: User) -> AsyncClient:
+    """Authenticate the shared client as ``merchant``."""
+    client.headers.update(await bearer_headers(client))
+    return client

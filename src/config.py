@@ -25,6 +25,10 @@ class Config(CustomBaseSettings):
     # FR-11. Swaps every real courier adapter for a deterministic mock at registry
     # level, so a reviewer can run the whole service with no credentials at all.
     MOCK_MODE: bool = False
+    # FR-11.3. Mock adapters sleep a deterministic 200ms-3s to make the streaming
+    # visible in the UI; tests turn it off so the suite is not paced by theatre.
+    MOCK_LATENCY_ENABLED: bool = True
+    MOCK_FAILURE_RATE: float = 0.0
 
     # CORS
     CORS_ORIGINS: list[str] = ["*"]
@@ -42,6 +46,10 @@ class Config(CustomBaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6381
     CACHE_TIME_OUT: int = 300
+    # Prepended to every key this service writes (tokens, breaker state, check cache).
+    # Lets several environments — or several pytest-xdist workers — share one Redis
+    # without reading each other's state.
+    REDIS_KEY_PREFIX: str = ""
 
     # JWT
     JWT_SECRET_KEY: str
@@ -89,6 +97,7 @@ class Config(CustomBaseSettings):
     TOKEN_LOCK_TIMEOUT_MS: int = 10_000
     TOKEN_LOCK_POLL_INTERVAL: float = 0.1
     TOKEN_LOCK_MAX_POLL_SECONDS: float = 5.0
+    TOKEN_LOGIN_TIMEOUT_SECONDS: float = 10.0
 
     # CIRCUIT BREAKER (FR-5)
     BREAKER_FAILURE_THRESHOLD: int = 5

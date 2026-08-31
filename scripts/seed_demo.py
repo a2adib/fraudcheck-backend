@@ -4,21 +4,23 @@ Seed the demo dataset (FR-11.5).
 Run with ``just seed``. Idempotent — re-running refreshes the demo accounts and their
 grants rather than creating a second set, so it is safe after every migration.
 
-Scope grows with the milestones. Today that is the permission catalogue, the roles and
-the demo accounts (FR-1.11). The rest of FR-11.5 (50 historical checks, 200
+Scope grows with the milestones. Today that is the permission catalogue, the roles, the
+demo accounts (FR-1.11) and 50 historical checks. The rest of FR-11.5 (200
 ``OrderContext`` rows with labelled outcomes — enough to train the demo model for
-AC-11.8) lands with the tables it needs, at M4 and M6.
+AC-11.8) lands with the tables it needs, at M6.
 
 Three accounts, not one, because RBAC is only demonstrable with something to compare:
 the owner holds every permission, the reviewer can override a decision (AC-1.13), and
 the analyst can only read. Logging in as each is the fastest way to see the guards work.
+The check history hangs off the owner, which is the account the demo logs in as.
 """
 
 import asyncio
 import sys
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -26,9 +28,15 @@ from src.auth.enums import PermissionCode
 from src.auth.models import Permission, Role
 from src.auth.services import DEFAULT_ROLE_NAME, AuthorizationService
 from src.auth.utils import get_password_hash
+from src.checks.enums import CheckSource
+from src.checks.models import CheckRequest, ProviderResult
+from src.checks.scoring import score_courier_history
 from src.config import settings
 from src.constants import Environment
 from src.database import AsyncSessionLocal
+from src.logistics.enums import ProviderEnum, ProviderStatus
+from src.logistics.providers.mock import RESERVED_SCENARIOS, scenario_for
+from src.logistics.schemas import DeliveryStats
 from src.users.enums import Locale, UserStatus
 from src.users.models import User
 
@@ -98,7 +106,14 @@ async def schema_is_current() -> bool:
     """
     statement = text("SELECT to_regclass(:qualified_name)")
     async with AsyncSessionLocal() as session:
-        for table in ("user", "permission", "role", "userrolelink"):
+        for table in (
+            "user",
+            "permission",
+            "role",
+            "userrolelink",
+            "checkrequest",
+            "providerresult",
+        ):
             found = await session.scalar(statement, {"qualified_name": f"public.{table}"})
             if found is None:
                 return False
@@ -209,6 +224,92 @@ async def _upsert_user(session: AsyncSession, spec: AccountSpec) -> User:
     return user
 
 
+HISTORICAL_CHECK_COUNT = 50
+
+
+def demo_phone_numbers(count: int = HISTORICAL_CHECK_COUNT) -> list[str]:
+    """
+    Build the number list the demo history is made of.
+
+    Every reserved number comes first, so a reviewer opening the history immediately
+    sees the interesting cases; the rest are filled in deterministically.
+    """
+    reserved = list(RESERVED_SCENARIOS)
+    filler = [f"017{index:08d}" for index in range(10_000_000, 10_000_000 + count)]
+    return (reserved + filler)[:count]
+
+
+async def seed_historical_checks(merchant: User) -> int:
+    """
+    Give the demo merchant a check history (FR-11.5).
+
+    Scored through the real scoring function over the real mock scenarios, so the
+    seeded history and a live mock check of the same number agree — a demo where the
+    stored score and the streamed score differ is worse than no demo.
+    """
+    async with AsyncSessionLocal() as session:
+        already = await session.scalar(
+            select(func.count())
+            .select_from(CheckRequest)
+            .where(CheckRequest.user_id == merchant.id)
+        )
+        if already:
+            return 0
+
+        now = datetime.now(UTC)
+        for index, phone in enumerate(demo_phone_numbers()):
+            stats_by_provider: dict[ProviderEnum, DeliveryStats] = {}
+            legs: list[tuple[ProviderEnum, ProviderStatus, DeliveryStats | None]] = []
+
+            for provider in ProviderEnum:
+                scenario = scenario_for(phone, provider)
+                if scenario.fails or scenario.times_out:
+                    legs.append((provider, ProviderStatus.UNAVAILABLE, None))
+                    continue
+                stats = DeliveryStats(
+                    total_orders=scenario.total_orders,
+                    delivered=scenario.delivered,
+                    returned=max(scenario.total_orders - scenario.delivered, 0),
+                    cancelled=0,
+                )
+                stats_by_provider[provider] = stats
+                legs.append((provider, ProviderStatus.OK, stats))
+
+            score = score_courier_history(stats_by_provider)
+            # Spread over the past few weeks so the history list has a shape to it.
+            created_at = now - timedelta(hours=index * 7)
+            check = CheckRequest(
+                user_id=merchant.id,
+                phone_normalized=phone,
+                source=CheckSource.WEB if index % 3 else CheckSource.API,
+                risk_score=score.score,
+                risk_band=score.band,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            session.add(check)
+            await session.flush()
+
+            for provider, status, stats in legs:
+                session.add(
+                    ProviderResult(
+                        check_request_id=check.id,
+                        provider=provider,
+                        status=status,
+                        total_orders=stats.total_orders if stats else None,
+                        delivered=stats.delivered if stats else None,
+                        returned=stats.returned if stats else None,
+                        cancelled=stats.cancelled if stats else None,
+                        latency_ms=180 + index,
+                        created_at=created_at,
+                        updated_at=created_at,
+                    )
+                )
+
+        await session.commit()
+        return HISTORICAL_CHECK_COUNT
+
+
 async def main() -> None:
     if settings.ENVIRONMENT is Environment.PRODUCTION:
         print("Refusing to seed a PRODUCTION environment.", file=sys.stderr)
@@ -224,6 +325,10 @@ async def main() -> None:
     permission_count = await sync_permissions()
     roles = await seed_demo_roles()
     accounts = await seed_demo_accounts()
+    # The history hangs off the owner: it is the account the demo signs in as, and
+    # tenant scoping means checks seeded anywhere else would be invisible from it.
+    owner, _ = accounts[0]
+    seeded_checks = await seed_historical_checks(owner)
 
     print(f"Synced {permission_count} permissions")
     print(f"Seeded {len(roles) + 1} roles: {DEFAULT_ROLE_NAME}, {', '.join(r.name for r in roles)}")
@@ -233,9 +338,13 @@ async def main() -> None:
         print(f"  {user.email:<28} {user.mobile:<12} {role_name:<14} {user.public_id}")
     print()
     print(f"  mode      : {'mock' if settings.MOCK_MODE else 'live'}")
+    print(
+        f"Seeded {seeded_checks} historical checks"
+        if seeded_checks
+        else "Historical checks already present, left alone"
+    )
     print()
-    print("Still to seed as their tables land:")
-    print("  M4 — 50 historical CheckRequest + ProviderResult rows")
+    print("Still to seed as its tables land:")
     print("  M6 — 200 OrderContext rows with labelled AssessmentOutcomes (FR-11.5)")
 
 

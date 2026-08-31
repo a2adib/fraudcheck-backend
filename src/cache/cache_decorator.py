@@ -73,7 +73,8 @@ def async_cache_result(
 
             if skip_cache_if is None or not skip_cache_if(result):
                 async with client.pipeline(transaction=False) as pipe:
-                    pipe.setex(cache_key, ttl, json.dumps(result))
+                    # `setex` is deprecated in redis-py 6; `set(..., ex=)` is the same call.
+                    pipe.set(cache_key, json.dumps(result), ex=ttl)
                     for tag in tags or []:
                         pipe.sadd(f"cache_tag:{tag}", cache_key)
                         pipe.expire(f"cache_tag:{tag}", ttl)
