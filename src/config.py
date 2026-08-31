@@ -40,7 +40,7 @@ class Config(CustomBaseSettings):
 
     # REDIS
     REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
+    REDIS_PORT: int = 6381
     CACHE_TIME_OUT: int = 300
 
     # JWT
