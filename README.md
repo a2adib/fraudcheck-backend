@@ -14,7 +14,7 @@ uv sync
 cp .env.example .env
 just up          # Postgres 16 + Redis 7
 just migrate
-just seed        # demo merchant + history
+just seed        # permissions, roles, three demo accounts
 just run
 ```
 
