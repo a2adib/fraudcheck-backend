@@ -20,8 +20,8 @@ There is no score, no threshold, and no decision. `Customer.behavior` — the `H
 | Govaly | Here | Notes |
 |---|---|---|
 | Pathao `POST /api/v1/user/success` lookup | `src/logistics/providers/pathao.py` | Same contract; now per-merchant credentials |
-| RedX `customer-success-return-rate` lookup | *not yet ported* | FR-3.6 requires an async rewrite |
-| `PathaoTokenManager` | `src/logistics/token_manager.py` | Per tenant, Redis-only — see ADR-0002 |
+| RedX `customer-success-return-rate` lookup | `src/logistics/providers/redx.py` | Rewritten async per FR-3.6; failures are no longer swallowed |
+| `PathaoTokenManager`, `RedXTokenManager` | `src/logistics/token_manager.py` | Per tenant, Redis-only — see ADR-0002 |
 | `asyncio.gather` fan-out | `src/checks/services.py` | Now streams each leg as it resolves |
 | `cache_result` decorator | `src/cache/cache_decorator.py` | Ported in M0 |
 | Six-month staleness rule | `CHECK_CACHE_TTL_SECONDS` (15 min) | See "Why the TTL shrank" |
@@ -65,7 +65,7 @@ writer in code, and carries whichever operator's judgement typed it.
 
 ## What a migrating tenant gets on day one
 
-- Courier history: immediately, from their own Pathao credential.
+- Courier history: immediately, from their own Pathao and RedX credentials.
 - A courier risk score: immediately, with `insufficient_data` set for numbers no courier has seen.
 - Internal-history scoring and the anomaly detectors (FR-16): only once orders start flowing
   through `/orders/assess`, or a backfill lands (FR-16.10).

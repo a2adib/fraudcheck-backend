@@ -35,6 +35,7 @@ from typing import Any, ClassVar
 from uuid import uuid4
 
 import httpx
+import jwt
 from pydantic import BaseModel
 from redis.asyncio import Redis as AsyncRedis
 from redis.exceptions import RedisError
@@ -61,6 +62,14 @@ return 0
 # requests in one process take this lock, and only the first one talks to Redis at
 # all. Keyed by cache key, so it is per (provider, tenant) like the Redis lock.
 _LOCAL_LOCKS: dict[str, asyncio.Lock] = {}
+
+#: RedX mints a JWT and states the expiry only inside it. When the token is not a
+#: decodable JWT there is nothing to read, so fall back to the twelve hours upstream
+#: has been assuming in production.
+REDX_DEFAULT_TOKEN_TTL_SECONDS = 12 * 3600
+
+#: header.payload.signature — anything else is not a JWT and has no ``exp`` to read.
+_JWT_SEGMENTS = 3
 
 #: Statuses that mean "these credentials are wrong", as opposed to "this portal is
 #: having a bad day". Pathao answers a bad password with 400 as often as 401.
@@ -330,8 +339,84 @@ class PathaoTokenManager(CourierTokenManager):
         )
 
 
+def _jwt_expiry(token: str) -> float | None:
+    """
+    Read ``exp`` off a JWT without verifying it — only the timestamp is wanted.
+
+    Ported from ``govaly-backend/src/logistics/token_manager.py``. Verification would
+    need RedX's signing key, which we do not have and do not need: this token is a
+    bearer we hand straight back to the issuer, and reading the expiry wrong costs one
+    superfluous login, not a security property.
+    """
+    if token.count(".") != _JWT_SEGMENTS - 1:  # not header.payload.signature, so not a JWT
+        return None
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+    except jwt.PyJWTError:
+        logger.warning("RedX token is not a decodable JWT; falling back to the default TTL")
+        return None
+    exp = claims.get("exp")
+    return float(exp) if isinstance(exp, (int, float)) and not isinstance(exp, bool) else None
+
+
+class RedxTokenManager(CourierTokenManager):
+    """
+    RedX merchant login.
+
+    Two things separate this from Pathao. RedX logs in on a *different host* to the one
+    the lookup is made against (``REDX_API_BASE_URL`` vs ``REDX_PANEL_BASE_URL``), and it
+    reports a rejected credential in the *body* — ``isError: true`` at HTTP 200 — so
+    ``raise_for_status()`` never fires and the auth error is raised from
+    ``_parse_login_response`` instead. The base class calls that method outside its own
+    ``try``, so the error reaches the caller as-is rather than being rewrapped as an
+    outage.
+    """
+
+    provider: ClassVar[ProviderEnum] = ProviderEnum.REDX
+
+    def _login_request(self) -> tuple[str, dict[str, Any]]:
+        """
+        RedX identifies a merchant by phone, not username.
+
+        The vault stores one ``username`` column per credential (FR-2); for RedX that
+        column holds the login phone. This is the only place that mapping exists.
+        """
+        return (
+            f"{settings.REDX_API_BASE_URL}/v4/auth/login",
+            {
+                "phone": self.credential.username.get_secret_value(),
+                "password": self.credential.password.get_secret_value(),
+            },
+        )
+
+    def _parse_login_response(self, data: dict[str, Any]) -> TokenRecord:
+        if data.get("isError"):
+            # Upstream interpolates ``data["message"]`` into the error. That message has
+            # been observed to echo the submitted phone, which FR-2.5 / AC-2.6 forbid
+            # anywhere near a log line — so the reason is dropped, not quoted.
+            msg = "RedX rejected the credential"
+            raise ProviderAuthError(msg)
+
+        payload = data.get("data")
+        access_token = payload.get("accessToken") if isinstance(payload, dict) else None
+        if not access_token:
+            msg = "RedX login response carried no accessToken"
+            raise ProviderAuthError(msg)
+
+        now = datetime.now(UTC)
+        access_token = str(access_token)
+        expires_at = _jwt_expiry(access_token) or now.timestamp() + REDX_DEFAULT_TOKEN_TTL_SECONDS
+        return TokenRecord(
+            access_token=access_token,
+            expires_at=expires_at,
+            token_type="Bearer",  # noqa: S106 — the auth scheme, not a secret
+            refreshed_at=now.isoformat(),
+        )
+
+
 _MANAGERS: dict[ProviderEnum, type[CourierTokenManager]] = {
     ProviderEnum.PATHAO: PathaoTokenManager,
+    ProviderEnum.REDX: RedxTokenManager,
 }
 
 

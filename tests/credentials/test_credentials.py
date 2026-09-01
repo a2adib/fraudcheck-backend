@@ -16,6 +16,7 @@ from src.users.models import User
 USERNAME = "merchant-account@shop.com"
 PASSWORD = "pathao-portal-password"
 LOGIN_URL = "https://merchant.pathao.test/api/v1/login"
+REDX_LOGIN_URL = "https://redx-api.test/v4/auth/login"
 
 
 async def store_credential(
@@ -148,6 +149,34 @@ class TestVerification:
         assert response.status_code == 501
         credential = (await async_session.exec(select(CourierCredential))).one()
         assert credential.status is CredentialStatus.UNTESTED
+
+    @respx.mock
+    async def test_a_redx_credential_can_be_verified(self, auth_client: AsyncClient):
+        """RedX has a login now, so it is no longer part of the 501 case above."""
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json={"isError": False, "data": {"accessToken": "t"}})
+        )
+        await store_credential(auth_client, provider="redx")
+
+        response = await auth_client.post("/credentials/redx/verify")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == CredentialStatus.VALID.value
+
+    @respx.mock
+    async def test_a_redx_rejection_at_http_200_is_an_invalid_credential(
+        self, auth_client: AsyncClient
+    ):
+        """RedX says no in the body, not the status line — the merchant still sees `invalid`."""
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json={"isError": True, "message": "nope"})
+        )
+        await store_credential(auth_client, provider="redx")
+
+        response = await auth_client.post("/credentials/redx/verify")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == CredentialStatus.INVALID.value
 
     async def test_mock_mode_verifies_without_contacting_anyone(
         self, auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
