@@ -87,7 +87,10 @@ class Config(CustomBaseSettings):
 
     # COURIER PORTALS
     PATHAO_MERCHANT_URL: str = "https://merchant.pathao.com"
-    REDX_BASE_URL: str = "https://redx.com.bd"
+    # RedX splits login from the merchant panel across two hosts, so one base URL cannot
+    # serve both: the token is minted at ``api.redx.com.bd`` and spent at ``redx.com.bd``.
+    REDX_API_BASE_URL: str = "https://api.redx.com.bd"
+    REDX_PANEL_BASE_URL: str = "https://redx.com.bd"
     STEADFAST_BASE_URL: str = "https://portal.packzy.com"
     PROVIDER_TIMEOUT_SECONDS: float = 5.0
 
@@ -106,6 +109,23 @@ class Config(CustomBaseSettings):
 
     # CHECK CACHE (FR-6.8)
     CHECK_CACHE_TTL_SECONDS: int = 900
+
+    @field_validator(
+        "PATHAO_MERCHANT_URL",
+        "REDX_API_BASE_URL",
+        "REDX_PANEL_BASE_URL",
+        "STEADFAST_BASE_URL",
+        mode="before",
+    )
+    @classmethod
+    def _strip_trailing_slash(cls, value: str) -> str:
+        """
+        Every courier URL is joined with a path that already starts with ``/``.
+
+        A trailing slash in the environment would produce ``//api/v1/...``, which some
+        portals route and others 404 — normalise here rather than at each call site.
+        """
+        return value.rstrip("/") if isinstance(value, str) else value
 
     @field_validator("ENCRYPTION_KEY")
     @classmethod
