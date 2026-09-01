@@ -5,16 +5,22 @@ import json
 from datetime import UTC, datetime
 
 import httpx
+import jwt
 import pytest
 import redis.asyncio as aioredis
 import respx
 
 from src.config import settings
 from src.logistics.enums import ProviderEnum
-from src.logistics.exceptions import TokenWaitTimeout
+from src.logistics.exceptions import ProviderAuthError, TokenWaitTimeout
 from src.logistics.keys import token_data_key, token_lock_key
-from src.logistics.token_manager import PathaoTokenManager, TokenRecord
-from tests.logistics.conftest import LOGIN_URL, TENANT, credential_for
+from src.logistics.token_manager import (
+    REDX_DEFAULT_TOKEN_TTL_SECONDS,
+    PathaoTokenManager,
+    RedxTokenManager,
+    TokenRecord,
+)
+from tests.logistics.conftest import LOGIN_URL, REDX_LOGIN_URL, TENANT, credential_for
 
 FRESH_TOKEN = {"access_token": "fresh-token", "expires_in": 3600, "token_type": "Bearer"}
 CACHED_TOKEN = "cached-token"
@@ -168,3 +174,134 @@ class TestInvalidate:
         await manager().invalidate()
 
         assert await manager().get_token() == "fresh-token"
+
+
+def redx_manager(tenant: str = TENANT) -> RedxTokenManager:
+    return RedxTokenManager(credential_for(tenant, ProviderEnum.REDX))
+
+
+def redx_login_body(token: str) -> dict:
+    return {"isError": False, "data": {"accessToken": token}}
+
+
+class TestRedxLogin:
+    """RedX's login differs from Pathao's in every part except the lock around it."""
+
+    @respx.mock
+    async def test_the_login_body_carries_a_phone_not_a_username(self):
+        """
+        FR-2 stores one ``username`` column; RedX spends it as ``phone``.
+
+        Sending ``username`` would be accepted by nothing and rejected as a bad
+        credential, which is the most misleading failure available.
+        """
+        login = respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json=redx_login_body("redx-token"))
+        )
+
+        await redx_manager().get_token()
+
+        assert json.loads(login.calls.last.request.content) == {
+            "phone": "portal-user",
+            "password": "portal-password",
+        }
+
+    @respx.mock
+    async def test_a_rejected_credential_arrives_as_is_error_at_http_200(self):
+        """
+        RedX answers a bad password with 200 and ``isError: true``.
+
+        ``raise_for_status()`` never fires, so the auth error has to come out of
+        ``_parse_login_response`` — and reach the caller un-rewrapped as an outage.
+        """
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json={"isError": True, "message": "invalid"})
+        )
+
+        with pytest.raises(ProviderAuthError):
+            await redx_manager().get_token()
+
+    @respx.mock
+    async def test_the_rejection_reason_is_not_carried_into_the_error(self):
+        """FR-2.5 / AC-2.6 — RedX echoes the submitted phone in ``message``; it stays there."""
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(
+                200, json={"isError": True, "message": "no merchant for 01712345678"}
+            )
+        )
+
+        with pytest.raises(ProviderAuthError) as exc_info:
+            await redx_manager().get_token()
+
+        assert "01712345678" not in str(exc_info.value)
+
+    @respx.mock
+    async def test_a_login_response_with_no_access_token_is_an_auth_error(self):
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json={"isError": False, "data": {}})
+        )
+
+        with pytest.raises(ProviderAuthError):
+            await redx_manager().get_token()
+
+    @respx.mock
+    async def test_the_jwt_expiry_is_honoured(self, redis_client: aioredis.Redis):
+        """RedX states the expiry only inside the token, so it has to be read out."""
+        expires_at = datetime.now(UTC).timestamp() + 900
+        token = jwt.encode({"exp": int(expires_at)}, "x" * 32, algorithm="HS256")
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json=redx_login_body(token))
+        )
+
+        await redx_manager().get_token()
+
+        cached = TokenRecord.model_validate_json(
+            await redis_client.get(token_data_key(ProviderEnum.REDX, TENANT))
+        )
+        assert cached.expires_at == pytest.approx(expires_at, abs=1)
+
+    @respx.mock
+    async def test_a_token_that_is_not_a_jwt_falls_back_to_the_default_ttl(
+        self, redis_client: aioredis.Redis
+    ):
+        """An opaque token is not an error — it just has no expiry to read."""
+        before = datetime.now(UTC).timestamp()
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json=redx_login_body("an-opaque-token"))
+        )
+
+        await redx_manager().get_token()
+
+        cached = TokenRecord.model_validate_json(
+            await redis_client.get(token_data_key(ProviderEnum.REDX, TENANT))
+        )
+        assert cached.expires_at == pytest.approx(before + REDX_DEFAULT_TOKEN_TTL_SECONDS, abs=5)
+
+    @respx.mock
+    async def test_ac_4_5_two_merchants_get_two_redx_cache_keys(self, redis_client: aioredis.Redis):
+        """AC-4.5 — the per-tenant namespacing is the base class's, but assert it holds here."""
+        respx.post(REDX_LOGIN_URL).mock(
+            side_effect=[
+                httpx.Response(200, json=redx_login_body("token-a")),
+                httpx.Response(200, json=redx_login_body("token-b")),
+            ]
+        )
+
+        first = await redx_manager("tenant-a").get_token()
+        second = await redx_manager("tenant-b").get_token()
+
+        assert (first, second) == ("token-a", "token-b")
+        assert await redis_client.exists(token_data_key(ProviderEnum.REDX, "tenant-a"))
+        assert await redis_client.exists(token_data_key(ProviderEnum.REDX, "tenant-b"))
+
+    @respx.mock
+    async def test_a_pathao_token_is_never_served_to_a_redx_lookup(
+        self, redis_client: aioredis.Redis
+    ):
+        """The provider is part of the key, so the two never collide."""
+        respx.post(REDX_LOGIN_URL).mock(
+            return_value=httpx.Response(200, json=redx_login_body("redx-token"))
+        )
+        await seed_token(redis_client, TENANT, expires_in=3600, token="pathao-token")
+
+        assert await redx_manager().get_token() == "redx-token"

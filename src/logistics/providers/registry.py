@@ -13,6 +13,7 @@ from src.logistics.enums import ProviderEnum
 from src.logistics.providers.base import CourierAdapter
 from src.logistics.providers.mock import MockAdapter
 from src.logistics.providers.pathao import PathaoAdapter
+from src.logistics.providers.redx import RedxAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -43,3 +44,4 @@ def get_adapters() -> dict[ProviderEnum, CourierAdapter]:
 
 
 register(PathaoAdapter())
+register(RedxAdapter())
